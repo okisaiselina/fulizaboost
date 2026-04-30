@@ -20,7 +20,7 @@ export function Hero() {
         </p>
 
         {/* Adsterra Banner Ad */}
-        <AdsterraBanner />
+        /*<AdsterraBanner />*/
       </div>
     </div>
   );
