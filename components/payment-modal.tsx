@@ -398,8 +398,6 @@ export function PaymentModal({
                 Cancel
               </Button>
             </div>
-              </Button>
-            </div>
           </>
         )}
 
