@@ -5,7 +5,7 @@ import { Loader2, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { submitBoostRequest, initializePaystackPayment, verifyPaystackPayment } from '@/app/actions';
+import { submitBoostRequest, initializeIntasendPayment, checkPaymentStatus } from '@/app/actions';
 import { useActionToast } from '@/components/action-toasts';
 
 interface PaymentModalProps {
@@ -18,8 +18,7 @@ interface PaymentModalProps {
 
 const PAYMENT_TIMEOUT = 30000;
 const STATUS_CHECK_INTERVAL = 2000; // Check status every 2 seconds
-const MAX_STATUS_CHECKS = 15; // Max 30 seconds of polling (15 checks × 2 seconds)
-const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
+const MAX_STATUS_CHECKS = 30; // Maximum 60 seconds of checking
 
 type PaymentStatus = 'form' | 'processing' | 'successful' | 'failed';
 
@@ -32,11 +31,10 @@ export function PaymentModal({
 }: PaymentModalProps) {
   const [idNumber, setIdNumber] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastBoostId, setLastBoostId] = useState<string | null>(null);
-  const [reference, setReference] = useState<string | null>(null);
+  const [transactionId, setTransactionId] = useState<string | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('form');
   const [statusMessage, setStatusMessage] = useState('');
   
@@ -44,7 +42,7 @@ export function PaymentModal({
 
   // Poll for payment status
   useEffect(() => {
-    if (paymentStatus !== 'processing' || !reference) return;
+    if (paymentStatus !== 'processing' || !transactionId) return;
 
     let checkCount = 0;
     let interval: NodeJS.Timeout;
@@ -55,7 +53,7 @@ export function PaymentModal({
       
       checkCount++;
 
-      const result = await verifyPaystackPayment(reference);
+      const result = await checkPaymentStatus(transactionId);
 
       if (isCleanedUp) return;
 
@@ -84,7 +82,7 @@ export function PaymentModal({
       isCleanedUp = true;
       clearInterval(interval);
     };
-  }, [paymentStatus, reference]);
+  }, [paymentStatus, transactionId]);
 
   // Auto-reload and close on success
   useEffect(() => {
@@ -100,10 +98,9 @@ export function PaymentModal({
         // Reset and close
         setIdNumber('');
         setPhoneNumber('');
-        setEmail('');
         setError(null);
         setLastBoostId(null);
-        setReference(null);
+        setTransactionId(null);
         setPaymentStatus('form');
         onSuccess(phoneNumber, newLimit);
         
@@ -145,82 +142,23 @@ export function PaymentModal({
 
       setLastBoostId(submitResult.boostId || null);
 
-      // Initialize payment with Paystack
-      const paymentResult = await initializePaystackPayment(
+      // Initialize payment with Intasend
+      const paymentResult = await initializeIntasendPayment(
         submitResult.boostId || '',
         phoneNumber,
         processingFee,
-        email
+        newLimit
       );
 
       clearTimeout(timeoutId);
 
       if (paymentResult.success) {
-        // Use the authorization URL with a popup window instead of inline
-        if (!paymentResult.authorizationUrl) {
-          setIsLoading(false);
-          setError('No payment URL received from Paystack');
-          showError('Payment initialization failed');
-          return;
-        }
-
-        console.log('[v0] Opening Paystack payment in popup:', paymentResult.reference);
-
-        // Open payment URL in a popup window
-        const width = 800;
-        const height = 600;
-        const left = Math.max(0, window.innerWidth / 2 - width / 2);
-        const top = Math.max(0, window.innerHeight / 2 - height / 2);
-
-        const paymentWindow = window.open(
-          paymentResult.authorizationUrl,
-          'PaystackPayment',
-          `width=${width},height=${height},left=${left},top=${top}`
-        );
-
-        if (!paymentWindow || paymentWindow.closed) {
-          setIsLoading(false);
-          setError('Payment window blocked. Please allow popups.');
-          showError('Payment window could not be opened');
-          return;
-        }
-
-        setReference(paymentResult.reference || null);
+        // STK push sent - start showing processing state
+        setTransactionId(paymentResult.transactionId || null);
         setPaymentStatus('processing');
-        setStatusMessage('Opening Paystack payment page...');
+        setStatusMessage('Processing your payment...');
         setIsLoading(true);
-        showInfo('Payment window opened. Complete payment to boost your limit.');
-
-        // Poll for payment completion
-        let checkCount = 0;
-        const checkInterval = setInterval(() => {
-          checkCount++;
-          
-          if (paymentWindow.closed) {
-            clearInterval(checkInterval);
-            console.log('[v0] Payment window closed');
-            
-            // Verify payment status after window closes
-            verifyPaystackPayment(paymentResult.reference || '').then(result => {
-              if (result.status === 'successful') {
-                handlePaymentSuccess();
-              } else {
-                setIsLoading(false);
-                setPaymentStatus('processing');
-                setStatusMessage('Verifying payment status...');
-              }
-            });
-          }
-
-          if (checkCount >= 120) { // 4 minutes max (120 checks × 2 seconds)
-            clearInterval(checkInterval);
-            setIsLoading(false);
-            setPaymentStatus('processing');
-            setStatusMessage('Verifying payment...Please wait');
-          }
-        }, 2000);
-
-        return () => clearInterval(checkInterval);
+        showInfo('M-Pesa prompt sent to your phone. Please enter your PIN.');
       } else {
         setIsLoading(false);
         setError(paymentResult.error || 'Failed to initiate payment');
@@ -267,46 +205,27 @@ export function PaymentModal({
     }, PAYMENT_TIMEOUT);
 
     try {
-      const paymentResult = await initializePaystackPayment(
+      const paymentResult = await initializeIntasendPayment(
         lastBoostId,
         phoneNumber,
         processingFee,
-        email
+        newLimit
       );
 
       clearTimeout(timeoutId);
 
       if (paymentResult.success) {
-        // Use the authorization URL with a popup window
-        if (!paymentResult.authorizationUrl) {
-          setIsLoading(false);
-          setError('No payment URL received from Paystack');
-          showError('Payment initialization failed');
-          return;
-        }
-
-        console.log('[v0] Retry: Opening Paystack payment in popup:', paymentResult.reference);
-
-        const width = 800;
-        const height = 600;
-        const left = Math.max(0, window.innerWidth / 2 - width / 2);
-        const top = Math.max(0, window.innerHeight / 2 - height / 2);
-
-        const paymentWindow = window.open(
-          paymentResult.authorizationUrl,
-          'PaystackPayment',
-          `width=${width},height=${height},left=${left},top=${top}`
-        );
-
-        if (!paymentWindow || paymentWindow.closed) {
-          setIsLoading(false);
-          setError('Payment window blocked. Please allow popups.');
-          showError('Payment window could not be opened');
-          return;
-        }
-
-        setReference(paymentResult.reference || null);
+        setTransactionId(paymentResult.transactionId || null);
         setPaymentStatus('processing');
+        setStatusMessage('Processing your payment...');
+        setIsLoading(true);
+        showInfo('M-Pesa prompt sent to your phone. Please enter your PIN.');
+      } else {
+        setIsLoading(false);
+        setPaymentStatus('failed');
+        setError(paymentResult.error || 'Failed to initiate payment');
+        showError(paymentResult.error || 'Failed to initiate payment');
+      }
         setStatusMessage('Opening Paystack payment page...');
         setIsLoading(true);
         showInfo('Payment window opened. Complete payment to boost your limit.');
@@ -315,56 +234,14 @@ export function PaymentModal({
         let checkCount = 0;
         const checkInterval = setInterval(() => {
           checkCount++;
-          
-          if (paymentWindow.closed) {
-            clearInterval(checkInterval);
-            console.log('[v0] Payment window closed');
-            
-            // Verify payment status after window closes
-            verifyPaystackPayment(paymentResult.reference || '').then(result => {
-              if (result.status === 'successful') {
-                handlePaymentSuccess();
-              } else {
-                setIsLoading(false);
-                setPaymentStatus('processing');
-                setStatusMessage('Verifying payment status...');
-              }
-            });
-          }
-
-          if (checkCount >= 120) {
-            clearInterval(checkInterval);
-            setIsLoading(false);
-            setPaymentStatus('processing');
-            setStatusMessage('Verifying payment...Please wait');
-          }
-        }, 2000);
-      } else {
-        setIsLoading(false);
-        setPaymentStatus('failed');
-        setError(paymentResult.error || 'Failed to initiate payment');
-        showError(paymentResult.error || 'Failed to initiate payment');
-      }
-    } catch (err) {
-      clearTimeout(timeoutId);
-      setIsLoading(false);
-      setPaymentStatus('failed');
-      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
-      console.error('[v0] Retry error:', errorMsg);
-      setError(`Error: ${errorMsg}`);
-      showError(`Error: ${errorMsg}`);
-    }
-  };
-
   const handleCloseModal = () => {
     // Allow closing anytime, even during processing
     // Reset state
     setIdNumber('');
     setPhoneNumber('');
-    setEmail('');
     setError(null);
     setLastBoostId(null);
-    setReference(null);
+    setTransactionId(null);
     setPaymentStatus('form');
     setStatusMessage('');
     setIsLoading(false);
@@ -373,7 +250,7 @@ export function PaymentModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleCloseModal}>
-      <DialogContent className="max-w-md" onPointerDownOutside={undefined} aria-describedby="payment-modal-description">
+      <DialogContent className="max-w-md" onPointerDownOutside={undefined}>
         {/* Form State */}
         {paymentStatus === 'form' && (
           <>
@@ -439,24 +316,6 @@ export function PaymentModal({
                 />
                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                   Format: 0712345678 (starts with 07 or 01)
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
-                  Email Address
-                </label>
-                <Input
-                  type="email"
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={isLoading}
-                  required
-                  className="dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                />
-                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                  Required for payment receipt
                 </p>
               </div>
 
