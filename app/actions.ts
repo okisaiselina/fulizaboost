@@ -214,55 +214,6 @@ export async function checkPaymentStatus(transactionId: string) {
   }
 }
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables');
-}
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-const boostRequestSchema = z.object({
-  idNumber: z.string().min(1, 'ID number is required'),
-  phoneNumber: z.string().regex(/^(?:254|\+254|0)([7](?:(?:[01249][0-9])|(?:5[789])|(?:6[789])|(?:9[0-9]))[0-9]{6})$/, 'Invalid M-Pesa phone number'),
-  newLimit: z.number().min(7500, 'Invalid limit selected'),
-  processingFee: z.number().min(0, 'Invalid fee'),
-});
-
-type BoostRequest = z.infer<typeof boostRequestSchema>;
-
-export async function submitBoostRequest(data: BoostRequest) {
-  try {
-    const validated = boostRequestSchema.parse(data);
-
-    const { data: insertedData, error } = await supabase.from('fuliza_boosts').insert({
-      id_number: validated.idNumber,
-      phone_number: validated.phoneNumber,
-      new_limit: validated.newLimit,
-      processing_fee: validated.processingFee,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-    }).select();
-
-    if (error) {
-      console.error('[v0] Database error:', error);
-      return { success: false, error: 'Failed to submit request. Please try again.' };
-    }
-
-    return { 
-      success: true, 
-      message: 'Request submitted successfully',
-      boostId: insertedData?.[0]?.id,
-      phoneNumber: validated.phoneNumber,
-      newLimit: validated.newLimit,
-    };
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return { success: false, error: err.errors[0].message };
-    }
-    console.error('[v0] Unexpected error in submitBoostRequest:', err);
-    return { success: false, error: 'An unexpected error occurred' };
-  }
-}
-
 export async function initializePaystackPayment(
   boostId: string,
   phoneNumber: string,
