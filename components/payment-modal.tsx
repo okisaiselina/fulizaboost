@@ -226,14 +226,17 @@ export function PaymentModal({
         setError(paymentResult.error || 'Failed to initiate payment');
         showError(paymentResult.error || 'Failed to initiate payment');
       }
-        setStatusMessage('Opening Paystack payment page...');
-        setIsLoading(true);
-        showInfo('Payment window opened. Complete payment to boost your limit.');
+    } catch (err) {
+      clearTimeout(timeoutId);
+      setIsLoading(false);
+      setPaymentStatus('failed');
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
+      console.error('[v0] Retry error:', errorMsg);
+      setError(`Error: ${errorMsg}`);
+      showError(`Error: ${errorMsg}`);
+    }
+  };
 
-        // Poll for payment completion
-        let checkCount = 0;
-        const checkInterval = setInterval(() => {
-          checkCount++;
   const handleCloseModal = () => {
     // Allow closing anytime, even during processing
     // Reset state
